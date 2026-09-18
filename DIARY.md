@@ -234,6 +234,54 @@ was worth the setup twice over; it caught a DC-removal highpass that integer
 truncation had turned into a constant +35 offset, which would have made the
 clicking worse.
 
+## Store icons and banner
+
+The appstore wants icons in colour — 80x80 and 144x144, and 48x48 for
+Rebble's small icon — which the 25x25 one-bit launcher icon cannot be upscaled
+into. Two ways to get them: crop a gameplay
+still, or draw the bomb again bigger. Cropping looked like the better one at
+first — the emulator captures at emery's native 200x228, so a 144x144 crop is
+1:1 with no resampling at all, and an 80 can come from a 160 crop halved
+exactly 2:1. But a crop is a scene, not an icon. 144px cannot hold both the
+bomber at y 24 and the pails at y 190, so one or the other clips at an edge,
+and at 80 the bombs are six pixels across and the whole thing turns to mush at
+the size the store actually shows it. The crop path was written, compared and
+then deleted.
+
+So `tools/make_store_icon.py` draws it, like `make_icon.py` does, but in unit
+coordinates at whatever size is asked for: the bomb large in the square over a
+band of the wall, using `render.c`'s own colours. There is no antialiasing to
+be had without an image library, so it rasterises at 4x and box-filters down.
+Output is 8-bit truecolour, written by hand as it is in `make_icon.py`.
+
+    python3 tools/make_store_icon.py                     # all three, into store/
+    python3 tools/make_store_icon.py store/icon-80.png 80
+
+One thing there is not a pure scale of itself: the brick gets coarser below
+96px. At 144 the wall band is 35px and holds three courses, but at 48 it is
+11px, and three courses there put a 1px joint every 3px, which greys the band
+into mush rather than reading as brick. Small icons get two courses of wider
+bricks instead.
+
+The Rebble store also wants a 720x320 banner, which is drawn by
+`tools/make_banner.py` for the same reason the icons are: 228 to 320 is a 1.4x
+scale, so a screen capture would have to be resampled off the pixel grid and
+would go soft exactly where the game is one-pixel detail. Instead the bomber,
+the bombs and the pails are `render.c`'s own sprites in game units at 3x, so
+the banner cannot drift from what the watch shows.
+
+The title is centred with the top of the wall below it and Scarry off to one
+side, which is the shape these banners take. It needed a heavy face, so
+`TITLE_FONT` is a condensed 6x11 pixel face in the manner of Impact —
+two-unit stems, counters squeezed to two — outlined in black by stamping the
+word eight times around itself. The 5x7 face from the first attempt stayed on
+for the tagline; a second line in the heavy face fought the title. The first
+pass had the title ranged left with a bomb crossing the letters, which read as
+a hole in the word rather than as a bomb, so nothing overlaps the lettering
+now.
+
+    python3 tools/make_banner.py                     # store/banner-720x320.png
+
 ## Reference
 
 Pulled out of the README when that was cut down to what a player needs. These
@@ -252,6 +300,9 @@ are the numbers and shapes as they stand.
 - `src/c/settings.c` — persisted high score, difficulty and vibration
 - `src/c/main.c` — window, frame timer, touch and button input
 - `resources/kablooey-icon.png` — 25x25 launcher icon from `tools/make_icon.py`
+- `store/icon-48.png`, `store/icon-80.png`, `store/icon-144.png` — appstore
+  icons from `tools/make_store_icon.py`
+- `store/banner-720x320.png` — Rebble store banner from `tools/make_banner.py`
 - `tools/capture.py` — demo build, emulator run, GIF and stills
 
 ### Screen layout (emery, 200x228)
