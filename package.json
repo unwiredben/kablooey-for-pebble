@@ -1,0 +1,33 @@
+{
+  "name": "kablooey",
+  "author": "Ben Combee <combee@techwood.org>",
+  "version": "1.0.0",
+  "keywords": [
+    "pebble-app"
+  ],
+  "private": true,
+  "license": "MIT",
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Kablooey!",
+    "uuid": "caafb03d-395d-4016-ba6a-ebe82dd66d90",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": [
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "resources": {
+      "media": [
+        {
+          "type": "bitmap",
+          "name": "MENU_ICON",
+          "file": "kablooey-icon.png",
+          "menuIcon": true
+        }
+      ]
+    }
+  }
+}
