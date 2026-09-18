@@ -282,6 +282,228 @@ now.
 
     python3 tools/make_banner.py                     # store/banner-720x320.png
 
+## Alternating waves, and two things the first pass got wrong
+
+The ramp raised everything on every wave — more bombs, shorter gap, faster
+bombs, faster bomber, tighter turns — and the result was that no wave had a
+character. Each step was a small amount of everything, so waves 6 through 10
+felt like one long wave that gradually got worse. The two axes are now on
+alternating waves: even waves are pace (the throw gap and the fall speed), odd
+waves are the bomber (his walk speed and how soon he doubles back). Each track
+steps twice as hard, which keeps the old curve — every odd wave lands on the
+number the old ramp gave it — while making a step legible: you either hear the
+bombs coming quicker or you find you cannot follow him any more.
+
+Two bugs found while reading `game.c` for that change.
+
+A full bomb pool quietly slowed the wave down. `throw_bomb()` returns without
+throwing when all ten slots are in flight, but the caller reset the throw
+timer to a whole `drop_interval_ms` regardless, so a wave at the 170ms cap
+that hit the pool ceiling paid 170ms for a throw that never happened. The
+comment even claimed it retried next frame. It does now: the timer is only
+reset when a bomb actually left his hand.
+
+A new best was thrown away by walking off. The score bar shows the high score
+live, so a record shows the moment it is beaten, but `settings_note_score()`
+only ran at game over. Press back mid-run — or open the menu and back out of
+the app — and the record the bar had been showing all wave was gone.
+`game_commit_score()` now runs from `window_disappear` as well, which covers
+the menu, the back button and app exit; it writes nothing unless the score
+really is a best, so the cost of calling it on every menu open is a compare.
+
+## Narrower pails
+
+Difficulty only ever moved the starting wave, which meant the one thing that
+decides whether a bomb is catchable — how much of the screen the pails cover —
+was a compile-time constant. Pail width is now its own setting, Wide (38px) or
+Narrow (26px), sitting next to Difficulty rather than inside it, so narrow
+pails can be played from wave 1 as well as from wave 6. 26 is about two thirds
+of the original and still two and a half bombs across; half width was tried on
+paper and rejected as punishing at the late-wave fall speeds.
+
+`BUCKET_W` is gone. The width lives in `Game.bucket_w`, read once per run in
+`game_init()`, because three places have to agree about it: the catch box in
+`update_bombs()`, the drag clamps in `game_set_bucket_x()` — now
+`BUCKET_MIN_X(w)`/`BUCKET_MAX_X(w)` macros — and `draw_bucket_stack()`. A
+constant that only two of the three used would be a catch box that does not
+match the artwork.
+
+Changing the setting restarts the run, the way switching difficulty already
+does: the catch box is part of a run, and a stack that grows mid-wave would
+either invalidate the score or steal a catch.
+
+The one thing that did not scale for free was the water shimmer on the top
+pail — two strokes placed by eye at x+7..16 and x+22..30 on a 38px pail, the
+second of which runs off the end of a 26px one. They are proportioned to the
+width now, against `BUCKET_W_WIDE` as the reference.
+
+## Measuring the frame, and the blit that was the wrong blit
+
+Everything on screen was drawn from primitives every frame -- there was no
+`GBitmap` in the drawing path at all, and the launcher icon is the project's
+only bitmap resource. The wall looked like the thing to pre-render: it is
+identical on every frame (`draw_wall()` takes no arguments, and the shake only
+offsets the pail stack) and it is about 85 `fill_rect` calls, roughly eight
+bricks across by ten courses. With ~99KB of heap free, a 200x206 8-bit bitmap
+at 41KB was affordable.
+
+So it was measured rather than assumed. `RENDER_BENCH` in `render.c` repeats
+each element 30 times and divides, because `time_ms()` only resolves to a
+millisecond and no single element costs that much. The cache is built by
+painting the wall with the primitives and copying it straight out of
+`graphics_capture_frame_buffer()`, so there is no second rasteriser to drift
+from the first. Measured on a real Time 2 over `--cloudpebble`, from a
+`KABLOOEY_DEMO=1` build so the watch played itself while the numbers came out.
+
+The first result was that the cache *lost*: 2200us to blit against 1700us to
+draw the bricks. The conclusion drawn from that -- keep the primitives, the
+wall is not worth caching -- was written down, committed, and wrong. It came
+with a guess at the mechanism, that the blit was paying for per-pixel
+compositing, which nobody had checked.
+
+The owner's question was the useful one: the wall is the bottom layer, so why
+is it compositing at all? Two more measurements answered it. `GCompOpAssign`
+changed nothing, so compositing was never the cost. And bypassing
+`graphics_draw_bitmap_in_rect()` altogether -- capture the framebuffer, copy
+the cache in a row at a time with `memcpy`, release -- came in at 400us:
+
+| Wall, per frame | |
+| --- | --- |
+| `graphics_draw_bitmap_in_rect`, default mode | 2200 us |
+| `graphics_draw_bitmap_in_rect`, `GCompOpAssign` | 2200 us |
+| from primitives, ~85 `fill_rect` | 1700 us |
+| **framebuffer row `memcpy`** | **400 us** |
+| framebuffer capture and release, nothing between | ~0 us |
+
+So the cache was always the right idea and `draw_bitmap_in_rect` was the wrong
+way to spend it: the cost is that function's own per-row work, not alpha, and
+the framebuffer lock itself is free. `copy_wall_rows()` ships, and the two
+slower variants stay compiled under `RENDER_BENCH` as the comparison that
+justifies it. The direct write ignores the clip box, which is only safe because
+the game layer covers the whole screen -- a smaller layer would have to fold
+its bounds in.
+
+The rest of the frame, at the same sitting:
+
+| Element | Per frame |
+| --- | --- |
+| 8 bombs in flight | 7300 us |
+| bomber | 2350 us |
+| splash effect (up to 4) | 1030 us |
+| touch strip | 950 us |
+| score bar | 800 us |
+| pail stack of 3 | 200 us |
+
+The wall was never the expensive part. **The bombs are**, at about 910us each:
+four `fill_circle`s and a stroked fuse, eight of them in flight at the wave-8
+peak. A worst-case frame is now about 15.5ms of the 33ms budget, so there is no
+performance problem to fix. But the bomb is the sprite to cache if one ever
+appears, and it is 300 pixels rather than 41,000. The awkward part is
+transparency: a framebuffer capture carries no alpha, and the bomb body is
+black against black brick, so the mask cannot come from a colour-key. Drawing
+it over two different backgrounds and keeping the pixels that agree would give
+a clean mask without hand-rasterising the art twice.
+
+Also worth knowing: `score_bar` occasionally spikes from 800us to 4400us. It is
+the only element that lays out text, so a glyph cache miss is the likely cause,
+and it is once in a while rather than every frame.
+
+Heap with the cache resident: 55KB free on the watch, against 99KB before it.
+
+## Caching the bombs, and what antialiasing was really costing
+
+The bombs came next, on the owner's suggestion: a palettised bitmap, the
+flicker done by rewriting a palette entry, the mask an alpha-0 entry, drawn
+with `GCompOpSet`. One sprite for every bomb on screen, 160 bytes at 4bpp
+against the wall's 41KB.
+
+The sprite is built the same way the wall cache is -- by capturing what
+`draw_bomb()` paints, so the art has one description and no second rasteriser
+to drift from it. The difference is the mask: a capture carries no alpha, and
+the bomb body is black against black brick, so no colour-key can say which
+black is which. Capturing each phase over two different backgrounds settles
+it. A pixel that comes out the same over red and over green was painted by the
+bomb; one that follows the background is transparent.
+
+That the flicker changes the spark's *radius* as well as its colour -- r3
+yellow, then r2 orange -- took three tries, and the on-watch verification is
+what found the first two:
+
+1. **One mutable spark entry.** Cannot work: the ring between r2 and r3 has to
+   disappear on the small phase, and one entry cannot be both yellow and gone.
+2. **Two entries, core and ring**, the ring set to `GColorClear` on the small
+   phase. Verified at 19 pixels of 320 wrong, and the count moved with the
+   background -- the signature of antialiasing. An antialiased edge is a blend
+   with whatever is behind it, so it cannot be captured into a sprite at all:
+   the same bomb over brick and over sky would need different edge pixels.
+   `graphics_context_set_antialiased(ctx, false)` in `draw_bomb()` took it to 3
+   pixels, all backgrounds agreeing.
+3. **One entry per *pair* of colours** -- what the pixel is on the small phase
+   and what it is on the big one -- with the whole 16-entry palette swapped for
+   the phase being drawn. The last 3 pixels were where the big spark covers
+   part of the fuse: tan on one phase, yellow on the other, which core-and-ring
+   cannot express. Keying on the pair covers every way two phases can differ
+   at a pixel, and it deleted the special cases rather than adding one. Nine
+   entries in practice. Verified at 0 of 320 pixels differing, over three
+   backgrounds, both phases.
+
+`bomb_sprite_verify()` under `RENDER_BENCH` is that check: it draws both paths
+over identical backgrounds and counts the pixels that differ. Worth having,
+because a bomb is 13 pixels across and always in motion -- a screenshot cannot
+tell a nearly-right sprite from a right one, and the owner confirmed
+independently that the antialiased and aliased bombs are indistinguishable in
+motion. The numbers, not the picture, are what caught all three bugs.
+
+| 8 bombs, per frame | |
+| --- | --- |
+| primitives, antialiased | 7400 us |
+| primitives, antialiasing off | 2600 us |
+| palettised sprite | 1100 us |
+
+The surprise is the middle row. Antialiasing was most of what a bomb cost:
+turning it off saved 4800us, three times what the sprite then saved on top of
+it. It was switched off for its own sake -- a sprite cannot hold a
+backdrop-dependent blend -- and the speed came free with it.
+
+The frame now costs about 10ms of its 33ms budget, against 17ms before any of
+this.
+
+## The bomber: four poses, and an outline he needed anyway
+
+He was the most expensive element left, and he caches more simply than the
+bomb: two walk directions, which mirror his arms and shift his pupils, times
+two leg positions, and nothing else about him animates. Four fixed pictures
+cover him, so there is no palette trickery -- `bomber_pose_index()` is built
+from the same `(phase / 4) % 2` expression that animates him, so the sprites
+cannot index differently from the way he moves. 36x40 at 4bpp is 720 bytes a
+pose, 2.8KB for the set. The box is wider than `BOMBER_W` because the brim and
+the raised arm both reach past his body, and symmetric so one box serves both
+directions.
+
+Two art fixes went in at the same time, both from watching him on the real
+screen rather than in the emulator. His arms are three pixels of skin tone
+against the sky above the wall and the grey brick below it, and they
+disappeared into both; his head is the same skin against the same sky, and it
+is the thing you watch to read which way he is about to turn. Both are now
+stroked black underneath -- the arms at 5px with the 3px skin over them, the
+head as a radius-9 black circle under the radius-8 skin one -- which leaves a
+one-pixel outline.
+
+| Bomber, per frame | |
+| --- | --- |
+| primitives, antialiased, no outlines | 2350 us |
+| primitives, antialiasing off, with outlines | 1166 us |
+| sprite | 370-530 us |
+
+The middle row is the same lesson as the bomb, and a stronger version of it:
+he got *twice as fast* while gaining two more thick strokes, purely from
+turning antialiasing off. Verified at 0 of 1440 pixels differing, all four
+poses, over three backgrounds.
+
+What is left is the splash effect at 1030us each, up to four at once, which is
+the last antialiased circle work in the frame and deliberately untouched. The
+frame is now about 8ms of its 33ms budget, less than half what it was.
+
 ## Reference
 
 Pulled out of the README when that was cut down to what a player needs. These
@@ -293,11 +515,15 @@ are the numbers and shapes as they stand.
   the demo-mode knobs
 - `src/c/game.c` — waves, bomber, bombs, catch/miss, the miss chain, and the
   demo autoplayer
-- `src/c/render.c` — all drawing, from primitives; the only bitmap in the
-  project is the launcher icon
+- `src/c/render.c` — all drawing, from primitives, except the wall (drawn once
+  into a cached bitmap, copied into the framebuffer each frame), the bombs (one
+  palettised sprite, captured from `draw_bomb()`, its flicker a palette swap)
+  and the bomber (four captured poses); the only bitmap *resource* is the
+  launcher icon
 - `src/c/sound.c` — the PCM mixer, the synthesised effects and the mute setting
 - `src/c/menu.c` — options menu, difficulty picker, how-to-play text
-- `src/c/settings.c` — persisted high score, difficulty and vibration
+- `src/c/settings.c` — persisted high score, difficulty, pail width and
+  vibration
 - `src/c/main.c` — window, frame timer, touch and button input
 - `resources/kablooey-icon.png` — 25x25 launcher icon from `tools/make_icon.py`
 - `store/icon-48.png`, `store/icon-80.png`, `store/icon-144.png` — appstore
@@ -317,16 +543,27 @@ are the numbers and shapes as they stand.
 
 ### Waves
 
-Wave 1 throws 10 bombs 800ms apart at 1.75px/frame. Each wave after it adds
-three bombs, shortens the gap by 90ms, speeds the bombs up by 0.375px/frame,
-tightens the bomber's about-face window and pays `wave` points per catch. The
-caps — 40 bombs, 170ms, 7px/frame, a 0.7s fall — are reached around wave 15.
-See `wave_config()` in `src/c/game.c`. Peak bombs in flight is about 8, around
-wave 8, against a pool of 10.
+Wave 1 throws 10 bombs 800ms apart at 1.75px/frame. Every wave after it adds
+three bombs and pays `wave` points per catch, but the two axes that make a
+wave hard advance on alternating waves instead of both on every wave:
+
+- **pace** (even waves): the gap drops 180ms and the bombs gain 0.75px/frame
+- **erratic** (odd waves): the bomber gains 0.5px/frame and his about-face
+  window tightens by 90/340ms
+
+Each track steps twice as hard because it only steps half as often, so the
+curve is the same as the old every-wave ramp and every odd wave lands on
+exactly the value it used to have — wave 5 is still 440ms at 3.25px/frame.
+What changed is that a step now reads as one thing: quicker bombs, or a bomber
+who will not hold a line. The caps — 40 bombs, 170ms, 7px/frame, a 0.7s fall —
+are reached around wave 14. See `wave_config()` in `src/c/game.c`. Peak bombs
+in flight is about 8, around wave 8, against a pool of 10.
 
 Difficulty sets the starting wave (1, 3 or 6), which is also the floor for the
-knock-back. The high score and difficulty persist in `settings.c`; sound keeps
-its own flag in `sound.c`.
+knock-back. Pail width is the second, independent axis: `BUCKET_W_WIDE` 38 or
+`BUCKET_W_NARROW` 26, read into `Game.bucket_w` per run. The high score,
+difficulty and pail width persist in `settings.c` (keys 2, 3 and 5; vibration
+is 4); sound keeps its own flag in `sound.c`.
 
 ### Sound
 
@@ -361,5 +598,11 @@ backlight on. The knobs are at the top of `src/c/game.h`: `DEMO_BANNER_MS`,
 - `TOUCH_DEBUG_LOG` in `main.c` — every touch event. Off: 30 lines a second
   during a drag is enough jitter to starve the audio stream.
 - `AUDIO_DEBUG_LOG` in `sound.c` — one pacing summary per second. Off.
+- `RENDER_BENCH` in `render.c` — per-element frame timings every 150 frames,
+  the two slower ways of putting the cached wall on screen to compare against
+  the row copy that ships, and `bomb_sprite_verify()` and
+  `bomber_sprite_verify()`, which count the pixels where a sprite and the
+  primitives disagree. Off. Pair it with a
+  `KABLOOEY_DEMO=1` build so the watch plays itself while it is measured.
 
 Both are read with `pebble logs --emulator emery` or `--cloudpebble`.

@@ -11,12 +11,15 @@ static Window *s_menu_window;
 static SimpleMenuLayer *s_menu_layer;
 static Window *s_difficulty_window;
 static SimpleMenuLayer *s_difficulty_layer;
+static Window *s_pail_window;
+static SimpleMenuLayer *s_pail_layer;
 static Window *s_help_window;
 static ScrollLayer *s_help_scroll;
 static TextLayer *s_help_text;
 
 // Subtitles are rendered from these, so they have to outlive each redraw.
 static char s_difficulty_sub[24];
+static char s_pail_sub[16];
 static char s_high_score_sub[24];
 static char s_sound_sub[20];
 static char s_vibration_sub[8];
@@ -29,7 +32,7 @@ static const char s_help_body[] =
   "\n"
   "CONTROLS\n"
   "\n"
-  "Slide a finger anywhere on the lower half of the screen to move the pails. "
+  "Slide a finger anywhere on the lower half of the screen to move the buckets. "
   "They go where your finger is.\n"
   "\n"
   "Tap to start a wave, and to carry on after one ends.\n"
@@ -46,20 +49,27 @@ static const char s_help_body[] =
   "\n"
   "LOSING\n"
   "\n"
-  "A bomb that reaches the ground blows up a pail and sets off every other "
+  "A bomb that reaches the ground blows up a bucket and sets off every other "
   "bomb in the air. It also knocks you back a wave, so you replay the one "
-  "before it. Lose all three pails and the game is over.\n"
+  "before it. Lose all three buckets and the game is over.\n"
   "\n"
   "DIFFICULTY\n"
   "\n"
   "Easy, Normal and Hard start you at wave 1, 3 and 6. Later waves throw more "
   "bombs, faster, and pay more per catch. Your starting wave is also the "
   "lowest a miss can knock you back to.\n"
+  "\n"
+  "Bucket width is a separate choice. Narrow buckets catch a third less of the "
+  "screen and can be played from any starting wave. Changing either one "
+  "starts a fresh game.\n"
   " \n";
 
 static void close_menus(void) {
   if (s_difficulty_window && window_stack_contains_window(s_difficulty_window)) {
     window_stack_remove(s_difficulty_window, true);
+  }
+  if (s_pail_window && window_stack_contains_window(s_pail_window)) {
+    window_stack_remove(s_pail_window, true);
   }
   if (s_menu_window && window_stack_contains_window(s_menu_window)) {
     window_stack_remove(s_menu_window, true);
@@ -69,6 +79,8 @@ static void close_menus(void) {
 static void sync_subtitles(void) {
   snprintf(s_difficulty_sub, sizeof(s_difficulty_sub), "%s",
            difficulty_name(settings_difficulty()));
+  snprintf(s_pail_sub, sizeof(s_pail_sub), "%s",
+           pail_width_name(settings_pail_width()));
   snprintf(s_high_score_sub, sizeof(s_high_score_sub), "Best %d",
            settings_high_score());
   // A watch-level mute is not ours to override, so say so instead of offering
@@ -88,9 +100,12 @@ static void on_vibration(int index, void *context);
 static void on_reset_high_score(int index, void *context);
 static void on_help(int index, void *context);
 static void on_pick_difficulty(int index, void *context);
+static void on_pail_width(int index, void *context);
+static void on_pick_pail_width(int index, void *context);
 
 static SimpleMenuItem s_main_items[] = {
   { .title = "Difficulty", .subtitle = s_difficulty_sub, .callback = on_difficulty },
+  { .title = "Bucket width", .subtitle = s_pail_sub, .callback = on_pail_width },
   { .title = "Sound", .subtitle = s_sound_sub, .callback = on_sound },
   { .title = "Vibration", .subtitle = s_vibration_sub, .callback = on_vibration },
   { .title = "How to play", .callback = on_help },
@@ -112,6 +127,19 @@ static SimpleMenuItem s_difficulty_items[] = {
 static SimpleMenuSection s_difficulty_section[] = {
   { .title = "Difficulty", .num_items = ARRAY_LENGTH(s_difficulty_items),
     .items = s_difficulty_items },
+};
+
+// Order matches the PailWidth enum, as the difficulty items match Difficulty.
+static SimpleMenuItem s_pail_items[] = {
+  { .title = "Wide", .subtitle = "The standard buckets",
+    .callback = on_pick_pail_width },
+  { .title = "Narrow", .subtitle = "Harder to catch with",
+    .callback = on_pick_pail_width },
+};
+
+static SimpleMenuSection s_pail_section[] = {
+  { .title = "Bucket width", .num_items = ARRAY_LENGTH(s_pail_items),
+    .items = s_pail_items },
 };
 
 static void redraw_main_menu(void) {
@@ -151,6 +179,16 @@ static void on_pick_difficulty(int index, void *context) {
   close_menus();
 }
 
+static void on_pick_pail_width(int index, void *context) {
+  if (index < 0 || index >= (int)ARRAY_LENGTH(s_pail_items)) return;
+
+  settings_set_pail_width((PailWidth)index);
+  // The catch box is part of the run, so switching starts a fresh one.
+  if (s_game) game_init(s_game);
+  redraw_main_menu();
+  close_menus();
+}
+
 // --- Windows ---------------------------------------------------------------
 
 static void difficulty_window_load(Window *window) {
@@ -179,6 +217,34 @@ static void on_difficulty(int index, void *context) {
     });
   }
   window_stack_push(s_difficulty_window, true);
+}
+
+static void pail_window_load(Window *window) {
+  Layer *root = window_get_root_layer(window);
+  s_pail_layer = simple_menu_layer_create(
+      layer_get_bounds(root), window, s_pail_section,
+      ARRAY_LENGTH(s_pail_section), NULL);
+  menu_layer_set_selected_index(
+      simple_menu_layer_get_menu_layer(s_pail_layer),
+      (MenuIndex) { .section = 0, .row = (uint16_t)settings_pail_width() },
+      MenuRowAlignCenter, false);
+  layer_add_child(root, simple_menu_layer_get_layer(s_pail_layer));
+}
+
+static void pail_window_unload(Window *window) {
+  simple_menu_layer_destroy(s_pail_layer);
+  s_pail_layer = NULL;
+}
+
+static void on_pail_width(int index, void *context) {
+  if (!s_pail_window) {
+    s_pail_window = window_create();
+    window_set_window_handlers(s_pail_window, (WindowHandlers) {
+      .load = pail_window_load,
+      .unload = pail_window_unload,
+    });
+  }
+  window_stack_push(s_pail_window, true);
 }
 
 static void help_window_load(Window *window) {
@@ -244,9 +310,11 @@ void menu_init(Game *game) {
 
 void menu_deinit(void) {
   if (s_help_window) window_destroy(s_help_window);
+  if (s_pail_window) window_destroy(s_pail_window);
   if (s_difficulty_window) window_destroy(s_difficulty_window);
   if (s_menu_window) window_destroy(s_menu_window);
   s_help_window = NULL;
+  s_pail_window = NULL;
   s_difficulty_window = NULL;
   s_menu_window = NULL;
 }

@@ -11,23 +11,37 @@ static int clampi(int v, int lo, int hi) {
   return v;
 }
 
-// Wave 1 stays gentle; each wave after it throws more bombs, throws them
-// sooner, drops them faster and scatters them wider, and pays better. The
-// caps are what the late game settles at -- with the old ones everything was
-// pinned by wave 12 and it was still comfortable, so they are set well beyond
-// where a player is expected to survive.
+// Wave 1 stays gentle; every wave after it is longer and pays better, but the
+// two things that make a wave hard advance on alternating waves rather than
+// both at once:
+//
+//   PACE    -- bombs fall faster and are thrown closer together
+//   ERRATIC -- the bomber walks faster and doubles back sooner
+//
+// Ramping both every wave meant each step changed everything a little and the
+// waves blurred together. Alternating gives each one a character the player
+// can read: an even wave is the same bomber throwing quicker, an odd wave is
+// the same rain of bombs coming from a bomber who will not hold a line. Each
+// track therefore steps twice as hard, so the overall curve is unchanged and
+// every second wave lands on exactly the value the old ramp gave.
+//
+// The caps are what the late game settles at -- with the old ones everything
+// was pinned by wave 12 and it was still comfortable, so they are set well
+// beyond where a player is expected to survive.
 static WaveConfig wave_config(int wave) {
-  const int w = wave - 1;  // 0-based step count
+  const int w = wave - 1;         // 0-based step count
+  const int pace = (w + 1) / 2;   // wave 2 quickens, 4, 6...
+  const int erratic = w / 2;      // wave 3 unsettles him, 5, 7...
   const WaveConfig c = {
     .bomb_count = clampi(10 + w * 3, 10, 40),
-    .drop_interval_ms = clampi(800 - w * 90, 170, 800),
+    .drop_interval_ms = clampi(800 - pace * 180, 170, 800),
     // 1.75 px/frame (~53 px/sec) up to 7 px/frame (~210 px/sec), which crosses
     // the screen in about 0.7s.
-    .bomb_speed = clampi(TO_FP(1) + (FP * 3) / 4 + w * 6, 0, TO_FP(7)),
-    .bomber_speed = clampi(TO_FP(1) + FP / 4 + w * 4, 0, TO_FP(4)),
-    .turn_min_ms = clampi(BOMBER_TURN_MIN_MS - w * 45, BOMBER_TURN_FLOOR_MS,
-                          BOMBER_TURN_MIN_MS),
-    .turn_max_ms = clampi(BOMBER_TURN_MAX_MS - w * 170,
+    .bomb_speed = clampi(TO_FP(1) + (FP * 3) / 4 + pace * 12, 0, TO_FP(7)),
+    .bomber_speed = clampi(TO_FP(1) + FP / 4 + erratic * 8, 0, TO_FP(4)),
+    .turn_min_ms = clampi(BOMBER_TURN_MIN_MS - erratic * 90,
+                          BOMBER_TURN_FLOOR_MS, BOMBER_TURN_MIN_MS),
+    .turn_max_ms = clampi(BOMBER_TURN_MAX_MS - erratic * 340,
                           BOMBER_TURN_FLOOR_MS * 2, BOMBER_TURN_MAX_MS),
     .points_per_catch = wave,
   };
@@ -73,6 +87,7 @@ void game_init(Game *g) {
 #if DEMO_MODE && DEMO_START_WAVE > 0
   g->start_wave = DEMO_START_WAVE;
 #endif
+  g->bucket_w = pail_width_px(settings_pail_width());
   g->high_score = settings_high_score();
   g->wave = g->start_wave;
   g->wave_cfg = wave_config(g->wave);
@@ -105,6 +120,13 @@ void game_start_wave(Game *g) {
   g->state = GAME_PLAYING;
 }
 
+// A run can end by walking away as well as by losing the last pail, and the
+// score bar shows a new best the moment it happens -- so commit it here too,
+// not only at game over. A write only happens when the score really is a best.
+void game_commit_score(Game *g) {
+  settings_note_score(g->score);
+}
+
 void game_tap(Game *g) {
   switch (g->state) {
     case GAME_READY:
@@ -125,8 +147,8 @@ void game_tap(Game *g) {
 }
 
 void game_set_bucket_x(Game *g, int x) {
-  if (x < BUCKET_MIN_X) x = BUCKET_MIN_X;
-  if (x > BUCKET_MAX_X) x = BUCKET_MAX_X;
+  if (x < BUCKET_MIN_X(g->bucket_w)) x = BUCKET_MIN_X(g->bucket_w);
+  if (x > BUCKET_MAX_X(g->bucket_w)) x = BUCKET_MAX_X(g->bucket_w);
   g->bucket_x = x;
 }
 
@@ -136,7 +158,9 @@ static int catch_line(const Game *g) {
   return BUCKET_STACK_BOTTOM - (g->buckets * BUCKET_PITCH - BUCKET_GAP);
 }
 
-static void throw_bomb(Game *g) {
+// False when every slot is busy, which holds the throw for the caller to
+// retry: a full pool must not cost the wave a whole drop interval.
+static bool throw_bomb(Game *g) {
   for (int i = 0; i < MAX_BOMBS; i++) {
     if (g->bombs[i].active) continue;
     g->bombs[i].active = true;
@@ -144,9 +168,9 @@ static void throw_bomb(Game *g) {
     g->bombs[i].y = TO_FP(BOMB_SPAWN_Y);
     g->bombs_in_flight++;
     g->bombs_to_throw--;
-    return;
+    return true;
   }
-  // No free slot: hold the bomb and try again next frame.
+  return false;
 }
 
 // A bomb reached the ground: blow the pail, then let every bomb still in the
@@ -195,7 +219,7 @@ static void update_chain(Game *g) {
   if (g->chain_done) {
     if (g->buckets <= 0) {
       g->state = GAME_OVER;
-      settings_note_score(g->score);  // the run is over: commit the best
+      game_commit_score(g);
       sound_play(SFX_GAME_OVER);
     } else {
       g->state = GAME_READY;
@@ -241,8 +265,8 @@ static void update_bombs(Game *g) {
   // pails are inside the box, since a falling bomb can only reach them by
   // passing through a pail.
   const int box_top = catch_line(g);
-  const int box_left = g->bucket_x - BUCKET_W / 2;
-  const int box_right = g->bucket_x + BUCKET_W / 2;
+  const int box_left = g->bucket_x - g->bucket_w / 2;
+  const int box_right = g->bucket_x + g->bucket_w / 2;
 
   for (int i = 0; i < MAX_BOMBS; i++) {
     Bomb *b = &g->bombs[i];
@@ -341,8 +365,7 @@ void game_update(Game *g) {
 
   if (g->bombs_to_throw > 0) {
     g->throw_timer_ms -= FRAME_MS;
-    if (g->throw_timer_ms <= 0) {
-      throw_bomb(g);
+    if (g->throw_timer_ms <= 0 && throw_bomb(g)) {
       g->throw_timer_ms = g->wave_cfg.drop_interval_ms;
     }
   }

@@ -67,14 +67,18 @@
 #define BOMB_SPAWN_Y (BOMBER_TOP + 20)  // level with his throwing hand
 #define MISS_Y TOUCH_STRIP_TOP       // bomb bottom past this line is a miss
 
-#define BUCKET_W 38
+// Pail width is a setting, not a constant: `Game.bucket_w` is read once per
+// run from settings, and the catch box, the drag clamps and the renderer all
+// take it from there so they cannot disagree.
+#define BUCKET_W_WIDE 38
+#define BUCKET_W_NARROW 26
 #define BUCKET_H 10           // one pail
 #define BUCKET_GAP 4          // air between stacked pails
 #define BUCKET_PITCH (BUCKET_H + BUCKET_GAP)
 #define BUCKET_STACK_BOTTOM (TOUCH_STRIP_TOP - 4)
 #define BUCKET_START_COUNT 3
-#define BUCKET_MIN_X (BUCKET_W / 2 + 2)
-#define BUCKET_MAX_X (SCREEN_W - BUCKET_W / 2 - 2)
+#define BUCKET_MIN_X(w) ((w) / 2 + 2)
+#define BUCKET_MAX_X(w) (SCREEN_W - (w) / 2 - 2)
 
 // --- Gameplay --------------------------------------------------------------
 #define MAX_BOMBS 10       // bombs in flight at once (peak is ~8 around wave 8)
@@ -147,6 +151,7 @@ typedef struct {
 
   // Player
   int bucket_x;  // pixels, centre of the stack
+  int bucket_w;  // pixels across, from the pail width setting
 
 #if DEMO_MODE
   int demo_tap_timer_ms;
@@ -165,7 +170,9 @@ typedef struct {
 void game_init(Game *g);           // reads difficulty and high score from settings
 void game_start_wave(Game *g);
 void game_tap(Game *g);            // screen tap: start or restart
+void game_commit_score(Game *g);   // persist the score if it is a new best
 void game_set_bucket_x(Game *g, int x);
 void game_update(Game *g);         // advance one frame
 
 void game_render(Game *g, Layer *layer, GContext *ctx);
+void render_deinit(void);          // frees anything the renderer cached

@@ -16,8 +16,8 @@ drops with it. Lose all three and it's kablooey.
 - **Tap** to start a wave, and to carry on after one ends. The wave begins the
   moment your finger lands.
 - **Top button** toggles sound.
-- **Select** opens the menu: difficulty, sound, vibration, reset high score,
-  and how to play.
+- **Select** opens the menu: difficulty, pail width, sound, vibration, reset
+  high score, and how to play.
 
 ## How to play
 
@@ -25,9 +25,17 @@ Every bomb you douse scores the number of the wave you are on: 1 point each on
 wave 1, 7 each on wave 7. Clear a wave and you move up to the next one.
 
 Scarry paces the top of the wall and doubles back at random, so you cannot
-read where he will be — and the later the wave, the more often he turns.
-Each wave throws more bombs than the last, throws them faster, and drops them
-quicker.
+read where he will be. Every wave throws more bombs than the last, and the
+waves take turns raising the stakes: on one he throws quicker and the bombs
+fall faster, on the next he walks faster and turns back sooner. So a wave is
+either the same bomber speeding up or the same rain of bombs coming from a
+bomber you can no longer follow.
+
+Two settings make the game harder, and they are independent. **Difficulty**
+picks the wave a run starts on — 1, 3 or 6 — which is also the lowest a miss
+can knock you back to. **Pail width** narrows the pails from 38 pixels to 26,
+a third less of the screen to catch with, at any starting wave. Changing
+either one starts a fresh game.
 
 A bomb that reaches the ground blows up a pail, and every other bomb in the air
 goes off with it, one at a time from the bottom up. It also knocks you back a

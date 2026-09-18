@@ -105,6 +105,10 @@ static void window_appear(Window *window) {
 }
 
 static void window_disappear(Window *window) {
+  // Leaving the game -- for the menu, or out of the app entirely -- is also
+  // how a run ends. Commit the score so a best the bar is already showing is
+  // not lost by walking away mid-wave.
+  game_commit_score(&s_game);
   sound_suspend();
   if (s_timer) {
     app_timer_cancel(s_timer);
@@ -137,6 +141,7 @@ static void init(void) {
 }
 
 static void deinit(void) {
+  render_deinit();
   menu_deinit();
   sound_deinit();
   touch_service_unsubscribe();

@@ -2,14 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 #include "settings.h"
+#include "game.h"  // BUCKET_W_WIDE / BUCKET_W_NARROW
 
 #define PERSIST_KEY_HIGH_SCORE 2
 #define PERSIST_KEY_DIFFICULTY 3
 #define PERSIST_KEY_VIBRATION 4
+#define PERSIST_KEY_PAIL_WIDTH 5
 
 static int s_high_score;
 static Difficulty s_difficulty = DIFFICULTY_NORMAL;
 static bool s_vibration = true;
+static PailWidth s_pail_width = PAIL_WIDE;
 
 void settings_load(void) {
   if (persist_exists(PERSIST_KEY_HIGH_SCORE)) {
@@ -21,6 +24,10 @@ void settings_load(void) {
   if (persist_exists(PERSIST_KEY_DIFFICULTY)) {
     const int d = persist_read_int(PERSIST_KEY_DIFFICULTY);
     if (d >= 0 && d < DIFFICULTY_COUNT) s_difficulty = (Difficulty)d;
+  }
+  if (persist_exists(PERSIST_KEY_PAIL_WIDTH)) {
+    const int p = persist_read_int(PERSIST_KEY_PAIL_WIDTH);
+    if (p >= 0 && p < PAIL_WIDTH_COUNT) s_pail_width = (PailWidth)p;
   }
 }
 
@@ -75,6 +82,40 @@ const char *difficulty_name(Difficulty d) {
     case DIFFICULTY_NORMAL: return "Normal";
     case DIFFICULTY_HARD:   return "Hard";
     default:                return "Normal";
+  }
+}
+
+PailWidth settings_pail_width(void) {
+  return s_pail_width;
+}
+
+void settings_set_pail_width(PailWidth p) {
+  if (p >= PAIL_WIDTH_COUNT) return;  // the enum is unsigned; no low end to check
+  s_pail_width = p;
+  persist_write_int(PERSIST_KEY_PAIL_WIDTH, (int)p);
+}
+
+int pail_width_px(PailWidth p) {
+  switch (p) {
+    case PAIL_NARROW: return BUCKET_W_NARROW;
+    case PAIL_WIDE:   return BUCKET_W_WIDE;
+    default:          return BUCKET_W_WIDE;
+  }
+}
+
+const char *pail_width_name(PailWidth p) {
+  switch (p) {
+    case PAIL_NARROW: return "Narrow";
+    case PAIL_WIDE:   return "Wide";
+    default:          return "Wide";
+  }
+}
+
+const char *pail_width_detail(PailWidth p) {
+  switch (p) {
+    case PAIL_NARROW: return "Harder to catch with";
+    case PAIL_WIDE:   return "The standard buckets";
+    default:          return "";
   }
 }
 
